@@ -25,6 +25,9 @@ from oauth2client.client import GoogleCredentials
 from googleapiclient.discovery import build
 
 
+APP_NAME = 'deactivate_tunnel'
+
+
 def ParseArgs():
   """Parse args for the app, so interactive prompts can be avoided."""
 
@@ -41,6 +44,12 @@ def ParseArgs():
   parser.add_argument('--tunnel', metavar='TUNNEL_NAME', required=True,
                       help='Tunnel name to use for this invocation.')
   # Optional parameters.
+  parser.add_argument('--sleep',
+                      default=0, type=int,
+                      help='Seconds to sleep before removing old routes.')
+  parser.add_argument('--noop',
+                      default=False, type=Bool,
+                      help='Does not actually create or remove any routes.')
   parser.add_argument('--debug',
                       default=False, type=Bool,
                       help='(true/false) Enable debugging.')
@@ -126,6 +135,16 @@ def get_routes_by_tunnel(compute, project, region, tunnel):
     if route.has_key('nextHopVpnTunnel'):
       token = '/'.join(route['nextHopVpnTunnel'].split('/')[-5:])
       if token == match:
+        # Check the description to see that it is not indeed one that we have
+        # already created.
+        if 'description' in route.keys():
+          try:
+            description = json.loads(route['description'])
+            if APP_NAME in description.keys():
+              # Skip it.
+              continue
+          except ValueError:
+            pass
         routes.append(route)
   return routes
 
@@ -184,8 +203,9 @@ def get_routes_to_copy(compute, project, region, tunnel, long_way=False,
 
 def clone_route(route_obj):
   description = {
-      'orig_name': route_obj['name'],
-      'orig_priority': route_obj['priority'],
+      APP_NAME: 1,
+      'name': route_obj['name'],
+      'priority': route_obj['priority'],
   }
   route_new = {
       'name': route_obj['name'] + '-priority0',
@@ -216,11 +236,20 @@ def wait_for_global_operation(compute, project, operations):
         sys.stdout.write('.')
         sys.stdout.flush()
         time.sleep(1)
-  sys.stdout.write('done.')
+  sys.stdout.write('done.\n')
   return results
 
 
-def run(project, region, tunnel, debug):
+def sleep_seconds(seconds):
+  sys.stdout.write('Sleeping an additional %d seconds' % seconds)
+  for _ in range(0, seconds):
+    sys.stdout.write('.')
+    sys.stdout.flush()
+    time.sleep(1)
+  sys.stdout.write('done.\n')
+
+
+def run(project, region, tunnel, debug, sleep, noop):
   credentials = GoogleCredentials.get_application_default()
   compute = build('compute', 'v1', credentials=credentials)
 
@@ -233,20 +262,29 @@ def run(project, region, tunnel, debug):
   operations = []
   for route in routes_to_copy:
     route_new = clone_route(route)
-    route_created = compute.routes().insert(project=project,
-                                            body=route_new).execute()
+    if not noop:
+      route_created = compute.routes().insert(project=project,
+                                              body=route_new).execute()
+    else:
+      route_created = {'name': route_new}
     operations.append(route_created['name'])
     if debug:
       print '--> Requested the creation of route: %s' % (repr(route_created))
 
   # Wait for these new routes to be established
-  wait_for_global_operation(compute, project, operations)
+  if not noop:
+    wait_for_global_operation(compute, project, operations)
+
+  # Sleep if you need to for additional time.
+  if sleep > 0:
+    sleep_seconds(sleep)
 
 
 def main():
   # print 'Make sure you have run: gcloud auth login'
   pargs = ParseArgs()
-  run(pargs.project, pargs.region, pargs.tunnel, pargs.debug)
+  run(pargs.project, pargs.region, pargs.tunnel, pargs.debug, pargs.sleep,
+      pargs.noop)
 
 
 if __name__ == '__main__':
