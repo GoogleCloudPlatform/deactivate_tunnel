@@ -108,6 +108,17 @@ def list_routes(compute, project, debug=False):
   return result['items']
 
 
+def insert_route(compute, project, route):
+  route_new = compute.routes().insert(project=project, body=route).execute()
+  return route_new
+
+
+def delete_route(compute, project, route):
+  route_deleted = compute.routes().delete(project=project,
+                                          route=route).execute()
+  return route_deleted
+
+
 def get_routes_by_network(compute, project, network):
   routes = list_routes(compute, project)
   matches = []
@@ -261,12 +272,11 @@ def run(project, region, tunnel, debug, sleep, noop):
   # except priority which should be 0 (and the name which can't repeat).
   operations = []
   for route in routes_to_copy:
-    route_new = clone_route(route)
+    route_cloned = clone_route(route)
     if not noop:
-      route_created = compute.routes().insert(project=project,
-                                              body=route_new).execute()
+      route_created = insert_route(compute, project, route_cloned)
     else:
-      route_created = {'name': route_new}
+      route_created = route_cloned
     operations.append(route_created['name'])
     if debug:
       print '--> Requested the creation of route: %s' % (repr(route_created))
@@ -274,10 +284,27 @@ def run(project, region, tunnel, debug, sleep, noop):
   # Wait for these new routes to be established
   if not noop:
     wait_for_global_operation(compute, project, operations)
+  operations = []
 
   # Sleep if you need to for additional time.
   if sleep > 0:
     sleep_seconds(sleep)
+
+  # Now that the original routes have been cloned at a lower priority, we can
+  # delete them.
+  for route in routes_to_copy:
+    if not noop:
+      deleted_route = delete_route(compute, project, route['name'])
+    else:
+      deleted_route = route
+    operations.append(deleted_route['name'])
+    if debug:
+      print '--> Requested the deletion of route: %s' % (repr(deleted_route))
+
+  # Wait for these old routes to be removed.
+  if not noop:
+    wait_for_global_operation(compute, project, operations)
+  operations = []
 
 
 def main():
