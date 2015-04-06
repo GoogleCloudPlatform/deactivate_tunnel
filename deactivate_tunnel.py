@@ -47,12 +47,16 @@ def ParseArgs():
   parser.add_argument('--sleep',
                       default=0, type=int,
                       help='Seconds to sleep before removing old routes.')
+  parser.add_argument('--revert',
+                      default=False, action='store_const', const=True,
+                      help='Reactivates any routes originally deactivated '
+                      'by this script.')
   parser.add_argument('--noop',
-                      default=False, type=Bool,
+                      default=False, action='store_const', const=True,
                       help='Does not actually create or remove any routes.')
   parser.add_argument('--debug',
-                      default=False, type=Bool,
-                      help='(true/false) Enable debugging.')
+                      default=False, action='store_const', const=True,
+                      help='Enable debugging when set.')
 
   return parser.parse_args()
 
@@ -138,29 +142,19 @@ def get_routes_by_network_with_tunnel(compute, project, network):
   return routes
 
 
-def get_routes_by_tunnel(compute, project, region, tunnel):
+def get_routes_by_tunnel(compute, project, region, tunnel, revert):
   match = '%s/regions/%s/vpnTunnels/%s' % (project, region, tunnel)
   routes_all = list_routes(compute, project)
   routes = []
   for route in routes_all:
     if route.has_key('nextHopVpnTunnel'):
       token = '/'.join(route['nextHopVpnTunnel'].split('/')[-5:])
-      if token == match:
-        # Check the description to see that it is not indeed one that we have
-        # already created.
-        if 'description' in route.keys():
-          try:
-            description = json.loads(route['description'])
-            if APP_NAME in description.keys():
-              # Skip it.
-              continue
-          except ValueError:
-            pass
+      if token == match and revert == is_route_we_created(route):
         routes.append(route)
   return routes
 
 
-def get_routes_to_copy(compute, project, region, tunnel, long_way=False,
+def get_routes_to_copy(compute, project, region, tunnel, revert, long_way=False,
                        debug=False):
   # Find all the routes that point to this tunnel. Given a single route a
   # 'describe' will do this, but not sure how this is done for multiple routes.
@@ -190,43 +184,69 @@ def get_routes_to_copy(compute, project, region, tunnel, long_way=False,
     for route in routes_all:
       if route.has_key('nextHopVpnTunnel'):
         tunnel_short = name_from_url(route['nextHopVpnTunnel'])
-        if tunnel_short == tunnel:
+        if tunnel_short == tunnel and revert == is_route_we_created(route):
           routes_to_copy.append(route)
     if debug:
       print '--> Got these Routes for Network %s and Tunnel %s.' % (network,
                                                                     tunnel)
 
   else:
-    routes_to_copy = get_routes_by_tunnel(compute, project, region, tunnel)
+    routes_to_copy = get_routes_by_tunnel(compute, project, region, tunnel,
+                                          revert)
     if debug:
-      print '--> Got these Routes for Region %s and Tunnel %s.' % (region,
-                                                                   tunnel)
+      print '--> Got these Routes for Project: %s Region: %s Tunnel: %s.' % (
+          project, region, tunnel)
 
   if debug:
-    print 'NAME\tNETWORK\tnextHopVpnTunnel'
+    template = '{0:24} {1:24} {2:100}'
+    print template.format('NAME', 'NETWORK', 'nextHopVpnTunnel')
     for route in routes_to_copy:
       network_short = name_from_url(route['network'])
-      print '%s\t%s\t%s' % (route['name'], network_short,
+      print template.format(route['name'], network_short,
                             route['nextHopVpnTunnel'])
 
   return routes_to_copy
 
 
-def clone_route(route_obj):
-  description = {
-      APP_NAME: 1,
-      'name': route_obj['name'],
-      'priority': route_obj['priority'],
-  }
-  route_new = {
-      'name': route_obj['name'] + '-priority0',
-      'network': route_obj['network'],
-      'nextHopVpnTunnel': route_obj['nextHopVpnTunnel'],
-      'priority': 0,
-      'destRange': route_obj['destRange'],
-      'description': json.dumps(description, separators=(',', ':')),
-  }
-  return route_new
+def is_route_we_created(route):
+  found = False
+  if 'description' in route.keys():
+    try:
+      original = json.loads(route['description'])
+      if APP_NAME in original.keys():
+        found = True
+    except ValueError:
+      pass
+  return found
+
+
+def clone_route(route):
+  if is_route_we_created(route):
+    original = json.loads(route['description'])
+    route_cloned = {
+        'name': original['name'],
+        'network': route['network'],
+        'nextHopVpnTunnel': route['nextHopVpnTunnel'],
+        'priority': original['priority'],
+        'destRange': route['destRange'],
+        'description': original['description'],
+    }
+  else:
+    original = {
+        APP_NAME: 1,
+        'name': route['name'],
+        'priority': route['priority'],
+        'description': route['description'],
+    }
+    route_cloned = {
+        'name': route['name'] + '-priority0',
+        'network': route['network'],
+        'nextHopVpnTunnel': route['nextHopVpnTunnel'],
+        'priority': 0,
+        'destRange': route['destRange'],
+        'description': json.dumps(original, separators=(',', ':')),
+    }
+  return route_cloned
 
 
 def wait_for_global_operation(compute, project, operations):
@@ -260,17 +280,20 @@ def sleep_seconds(seconds):
   sys.stdout.write('done.\n')
 
 
-def run(project, region, tunnel, debug, sleep, noop):
+def run(project, region, tunnel, revert, sleep, debug, noop):
   credentials = GoogleCredentials.get_application_default()
   compute = build('compute', 'v1', credentials=credentials)
+  operations = []
 
-  # Find all the routes you need to copy
-  routes_to_copy = get_routes_to_copy(compute, project, region, tunnel,
+  # Find all the routes you need to clone.
+  routes_to_copy = get_routes_to_copy(compute, project, region, tunnel, revert,
                                       long_way=False, debug=debug)
 
   # For each of these, you need to create new route with similar properties,
   # except priority which should be 0 (and the name which can't repeat).
-  operations = []
+
+  if debug:
+    print '--> Requested the creation of these routes:'
   for route in routes_to_copy:
     route_cloned = clone_route(route)
     if not noop:
@@ -279,7 +302,7 @@ def run(project, region, tunnel, debug, sleep, noop):
       route_created = route_cloned
     operations.append(route_created['name'])
     if debug:
-      print '--> Requested the creation of route: %s' % (repr(route_created))
+      print '%s\t%s' % (route_created['name'], repr(route_created))
 
   # Wait for these new routes to be established
   if not noop:
@@ -292,14 +315,16 @@ def run(project, region, tunnel, debug, sleep, noop):
 
   # Now that the original routes have been cloned at a lower priority, we can
   # delete them.
+  if debug:
+    print '--> Requested the deletion of these routes:'
   for route in routes_to_copy:
     if not noop:
-      deleted_route = delete_route(compute, project, route['name'])
+      route_deleted = delete_route(compute, project, route['name'])
     else:
-      deleted_route = route
-    operations.append(deleted_route['name'])
+      route_deleted = route
+    operations.append(route_deleted['name'])
     if debug:
-      print '--> Requested the deletion of route: %s' % (repr(deleted_route))
+      print '%s\t%s' % (route_deleted['name'], repr(route_deleted))
 
   # Wait for these old routes to be removed.
   if not noop:
@@ -310,7 +335,8 @@ def run(project, region, tunnel, debug, sleep, noop):
 def main():
   # print 'Make sure you have run: gcloud auth login'
   pargs = ParseArgs()
-  run(pargs.project, pargs.region, pargs.tunnel, pargs.debug, pargs.sleep,
+  run(pargs.project, pargs.region, pargs.tunnel, pargs.revert, pargs.sleep,
+      pargs.debug,
       pargs.noop)
 
 
