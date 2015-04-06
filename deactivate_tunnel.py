@@ -26,6 +26,7 @@ from googleapiclient.discovery import build
 
 
 APP_NAME = 'deactivate_tunnel'
+CLONE_POSTFIX = '-p0'
 
 
 def ParseArgs():
@@ -53,7 +54,7 @@ def ParseArgs():
                       'by this script.')
   parser.add_argument('--noop',
                       default=False, action='store_const', const=True,
-                      help='Does not actually create or remove any routes.')
+                      help='Does not actually create or delete routes.')
   parser.add_argument('--debug',
                       default=False, action='store_const', const=True,
                       help='Enable debugging when set.')
@@ -186,24 +187,20 @@ def get_routes_to_copy(compute, project, region, tunnel, revert, long_way=False,
         tunnel_short = name_from_url(route['nextHopVpnTunnel'])
         if tunnel_short == tunnel and revert == is_route_we_created(route):
           routes_to_copy.append(route)
-    if debug:
-      print '--> Got these Routes for Network %s and Tunnel %s.' % (network,
-                                                                    tunnel)
+    print '--> Got these Routes for Network %s and Tunnel %s.' % (network,
+                                                                  tunnel)
 
   else:
     routes_to_copy = get_routes_by_tunnel(compute, project, region, tunnel,
                                           revert)
-    if debug:
-      print '--> Got these Routes for Project: %s Region: %s Tunnel: %s.' % (
-          project, region, tunnel)
+    print '--> Found these Routes for Project: %s Region: %s Tunnel: %s.' % (
+        project, region, tunnel)
 
-  if debug:
-    template = '{0:24} {1:24} {2:100}'
-    print template.format('NAME', 'NETWORK', 'nextHopVpnTunnel')
-    for route in routes_to_copy:
-      network_short = name_from_url(route['network'])
-      print template.format(route['name'], network_short,
-                            route['nextHopVpnTunnel'])
+  template = '{0:24} {1:24} {2:100}'
+  print template.format('NAME', 'NETWORK', 'TUNNEL LINK')
+  for route in routes_to_copy:
+    print template.format(route['name'], name_from_url(route['network']),
+                          route['nextHopVpnTunnel'])
 
   return routes_to_copy
 
@@ -236,10 +233,10 @@ def clone_route(route):
         APP_NAME: 1,
         'name': route['name'],
         'priority': route['priority'],
-        'description': route['description'],
+        'description': route.get('description', ''),
     }
     route_cloned = {
-        'name': route['name'] + '-priority0',
+        'name': route['name'] + CLONE_POSTFIX,
         'network': route['network'],
         'nextHopVpnTunnel': route['nextHopVpnTunnel'],
         'priority': 0,
@@ -289,42 +286,45 @@ def run(project, region, tunnel, revert, sleep, debug, noop):
   routes_to_copy = get_routes_to_copy(compute, project, region, tunnel, revert,
                                       long_way=False, debug=debug)
 
-  # For each of these, you need to create new route with similar properties,
-  # except priority which should be 0 (and the name which can't repeat).
-
-  if debug:
-    print '--> Requested the creation of these routes:'
+  # For each of these existing routes make a clone of their settings and request
+  # that they be created.
+  print '--> Requesting the creation of these routes:'
+  template = '{0:24} {1:24} {2:100}'
+  print template.format('NAME', 'ORIGINAL NAME', 'TARGET LINK')
   for route in routes_to_copy:
     route_cloned = clone_route(route)
     if not noop:
       route_created = insert_route(compute, project, route_cloned)
     else:
-      route_created = route_cloned
+      route_created = route_cloned.copy()
+      route_created['targetLink'] = 'N/A'
     operations.append(route_created['name'])
+    print template.format(route_cloned['name'], route['name'],
+                          route_created['targetLink'])
     if debug:
-      print '%s\t%s' % (route_created['name'], repr(route_created))
+      print '%s' % repr(route_created)
 
-  # Wait for these new routes to be established
+  # Wait for these new routes to be established.
   if not noop:
     wait_for_global_operation(compute, project, operations)
   operations = []
 
-  # Sleep if you need to for additional time.
+  # Sleep for any additional time if you were requested to do so.
   if sleep > 0:
     sleep_seconds(sleep)
 
-  # Now that the original routes have been cloned at a lower priority, we can
-  # delete them.
-  if debug:
-    print '--> Requested the deletion of these routes:'
+  # Delete the original routes that we were asked to clone.
+  print '--> Requesting the deletion of these routes:'
+  print 'NAME'
   for route in routes_to_copy:
     if not noop:
       route_deleted = delete_route(compute, project, route['name'])
     else:
       route_deleted = route
     operations.append(route_deleted['name'])
+    print '%s' % (route['name'])
     if debug:
-      print '%s\t%s' % (route_deleted['name'], repr(route_deleted))
+      print '%s' % repr(route_deleted)
 
   # Wait for these old routes to be removed.
   if not noop:
