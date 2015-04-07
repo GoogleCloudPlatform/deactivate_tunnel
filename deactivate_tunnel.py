@@ -12,7 +12,22 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-""" Deactivates all the routes in a VPN tunnel by setting their priority to 0.
+"""Deactivates all the routes in a VPN tunnel by setting their priority to 0.
+
+1. The input parameters you need are the project, tunnel name, region.
+2. Find all the routes that point to this tunnel. 
+3. For each of these, you need to create new route with similar properties,
+except priority which should be 0.
+4. Sleep a bit (1 min, but configurable).
+5. Delete all the routes you found in step #2.
+
+You can also restore any routes previously deactivated by this script by using
+the --restore flag.
+
+
+Note: be sure to run the following before running this script:
+ $ gcloud auth login
+
 """
 
 
@@ -24,8 +39,11 @@ import time
 from oauth2client.client import GoogleCredentials
 from googleapiclient.discovery import build
 
-
+# The name of this script. This is used to indicate which routes were created
+# by this script, so that they can be restored.
 APP_NAME = 'deactivate_tunnel'
+
+# This string will be appended to a route name when it's being deactivated.
 CLONE_POSTFIX = '-p0'
 
 
@@ -48,9 +66,9 @@ def ParseArgs():
   parser.add_argument('--sleep',
                       default=0, type=int,
                       help='Seconds to sleep before removing old routes.')
-  parser.add_argument('--revert',
+  parser.add_argument('--restore',
                       default=False, action='store_const', const=True,
-                      help='Reactivates any routes originally deactivated '
+                      help='Restores any routes previously deactivated '
                       'by this script.')
   parser.add_argument('--noop',
                       default=False, action='store_const', const=True,
@@ -63,149 +81,69 @@ def ParseArgs():
 
 
 def name_from_url(url):
+  """ Returns the right most value from a path."""
   return url.split('/')[-1]
 
 
-def list_tunnels(compute, project, region, debug=False):
-  result = compute.vpnTunnels().list(project=project, region=region).execute()
-  if debug:
-    print 'Found these tunnels in Project: %s Region: %s' % (project, region)
-    print 'NAME\tGATEWAY'
-    for item in result['items']:
-      gateway = name_from_url(item['targetVpnGateway'])
-      print '%s\t%s' % (item['name'], gateway)
-
-  return result['items']
-
-
-def get_tunnel(compute, project, region, tunnel):
-  tunnel = compute.vpnTunnels().get(project=project, region=region,
-                                    vpnTunnel=tunnel).execute()
-  return tunnel
-
-
-def list_gateways(compute, project, region, debug=False):
-  result = compute.targetVpnGateways().list(
-      project=project, region=region).execute()
-  if debug:
-    print 'Found these gateways in Project: %s Region: %s' % (project, region)
-    print 'NAME\tNETWORK'
-    for item in result['items']:
-      print ' %s - %s' % (item['name'], item['network'])
-  return result['items']
-
-
-def get_gateway(compute, project, region, gateway):
-  gateway = compute.targetVpnGateways().get(project=project, region=region,
-                                            targetVpnGateway=gateway).execute()
-  return gateway
-
-
 def list_routes(compute, project, debug=False):
-  result = compute.routes().list(project=project).execute()
+  """ Returns a list of all routes for the given project."""
+  routes = compute.routes().list(project=project).execute()
   if debug:
-    print 'Found these routes in Project: %s' % (project)
-    print 'NAME\tNETWORK'
-    for item in result['items']:
-      network = name_from_url(item['network'])
-      print '%s\t%s' % (item['name'], network)
+    print '--> Listing all Routes for Project: %s.' % (project)
+    template = '{0:24} {1:24} {2:100}'
+    print template.format('NAME', 'NETWORK', 'TUNNEL')
+    for route in routes['items']:
+      print template.format(route['name'], name_from_url(route['network']),
+                            name_from_url(route.get('nextHopVpnTunnel', '/')))
+  return routes['items']
 
-  return result['items']
+
+def get_routes_by_tunnel(compute, project, region, tunnel, restore, debug):
+  """ Filters all routes to a specific project, region and tunnel."""
+  match = '%s/regions/%s/vpnTunnels/%s' % (project, region, tunnel)
+  routes_all = list_routes(compute, project, debug)
+  routes = []
+  for route in routes_all:
+    if route.has_key('nextHopVpnTunnel'):
+      token = '/'.join(route['nextHopVpnTunnel'].split('/')[-5:])
+      if token == match and restore == is_route_we_created(route):
+        routes.append(route)
+  return routes
 
 
 def insert_route(compute, project, route):
+  """ Inserts a new route asynchronously."""
   route_new = compute.routes().insert(project=project, body=route).execute()
   return route_new
 
 
 def delete_route(compute, project, route):
+  """ Deletes an existing route asynchronously."""
   route_deleted = compute.routes().delete(project=project,
                                           route=route).execute()
   return route_deleted
 
 
-def get_routes_by_network(compute, project, network):
-  routes = list_routes(compute, project)
-  matches = []
-  for route in routes:
-    route_network = name_from_url(route['network'])
-    if network == route_network:
-      matches.append(route)
-  return matches
-
-
-def get_routes_by_network_with_tunnel(compute, project, network):
-  routes_all = get_routes_by_network(compute, project, network)
-  routes = []
-  for route in routes:
-    if route.has_key('nextHopVpnTunnel'):
-      routes.append(route)
-  return routes
-
-
-def get_routes_by_tunnel(compute, project, region, tunnel, revert):
-  match = '%s/regions/%s/vpnTunnels/%s' % (project, region, tunnel)
-  routes_all = list_routes(compute, project)
-  routes = []
-  for route in routes_all:
-    if route.has_key('nextHopVpnTunnel'):
-      token = '/'.join(route['nextHopVpnTunnel'].split('/')[-5:])
-      if token == match and revert == is_route_we_created(route):
-        routes.append(route)
-  return routes
-
-
-def get_routes_to_copy(compute, project, region, tunnel, revert, long_way=False,
-                       debug=False):
-  # Find all the routes that point to this tunnel. Given a single route a
-  # 'describe' will do this, but not sure how this is done for multiple routes.
-  routes_to_copy = []
-  if long_way:
-    # Get gateway for the tunnel
-    tunnel_obj = get_tunnel(compute, project, region, tunnel)
-    if tunnel_obj == None:
-      print 'Cannot find tunnel: %s' % (tunnel)
-      return
-
-    gateway = name_from_url(tunnel_obj['targetVpnGateway'])
-    if debug:
-      print '--> Got Gateway %s for Tunnel %s.' % (gateway, tunnel)
-
-    # Get network from the gateway
-    gateway_obj = get_gateway(compute, project, region, gateway)
-    if gateway_obj == None:
-      print 'Cannot find gateway: %s' % (gateway)
-      return
-
-    network = name_from_url(gateway_obj['network'])
-    if debug:
-      print '--> Got Network %s for Gateway %s.' % (network, gateway)
-
-    routes_all = get_routes_by_network(compute, project, network)
-    for route in routes_all:
-      if route.has_key('nextHopVpnTunnel'):
-        tunnel_short = name_from_url(route['nextHopVpnTunnel'])
-        if tunnel_short == tunnel and revert == is_route_we_created(route):
-          routes_to_copy.append(route)
-    print '--> Got these Routes for Network %s and Tunnel %s.' % (network,
-                                                                  tunnel)
-
-  else:
-    routes_to_copy = get_routes_by_tunnel(compute, project, region, tunnel,
-                                          revert)
-    print '--> Found these Routes for Project: %s Region: %s Tunnel: %s.' % (
-        project, region, tunnel)
+def get_routes_to_clone(compute, project, region, tunnel, restore, debug=False):
+  """ Returns all routes that match the project, region and tunnel."""
+  routes_to_clone = get_routes_by_tunnel(compute, project, region, tunnel,
+                                         restore, debug)
+  print '--> Found these Routes for Project: %s Region: %s Tunnel: %s.' % (
+      project, region, tunnel)
 
   template = '{0:24} {1:24} {2:100}'
-  print template.format('NAME', 'NETWORK', 'TUNNEL LINK')
-  for route in routes_to_copy:
+  print template.format('NAME', 'NETWORK', 'TUNNEL')
+  for route in routes_to_clone:
     print template.format(route['name'], name_from_url(route['network']),
-                          route['nextHopVpnTunnel'])
+                          name_from_url(route['nextHopVpnTunnel']))
+    if debug:
+      print '%s' % repr(route)
 
-  return routes_to_copy
+  return routes_to_clone
 
 
 def is_route_we_created(route):
+  """ Returns true if the route was one that was created by this script."""
   found = False
   if 'description' in route.keys():
     try:
@@ -218,6 +156,7 @@ def is_route_we_created(route):
 
 
 def clone_route(route):
+  """ Clones a route from an existing on that we may have created before."""
   if is_route_we_created(route):
     original = json.loads(route['description'])
     route_cloned = {
@@ -247,6 +186,7 @@ def clone_route(route):
 
 
 def wait_for_global_operation(compute, project, operations):
+  """ Returns when all operations have completed (with success or error). """
   sys.stdout.write('Waiting for operation(s) to finish')
   results = []
   for operation in operations:
@@ -269,6 +209,7 @@ def wait_for_global_operation(compute, project, operations):
 
 
 def sleep_seconds(seconds):
+  """ Sleeps for the given number of seconds."""
   sys.stdout.write('Sleeping an additional %d seconds' % seconds)
   for _ in range(0, seconds):
     sys.stdout.write('.')
@@ -277,21 +218,22 @@ def sleep_seconds(seconds):
   sys.stdout.write('done.\n')
 
 
-def run(project, region, tunnel, revert, sleep, debug, noop):
+def run(project, region, tunnel, restore, sleep, debug, noop):
+  """ Executes the route cloning logic."""
   credentials = GoogleCredentials.get_application_default()
   compute = build('compute', 'v1', credentials=credentials)
   operations = []
 
   # Find all the routes you need to clone.
-  routes_to_copy = get_routes_to_copy(compute, project, region, tunnel, revert,
-                                      long_way=False, debug=debug)
+  routes_to_clone = get_routes_to_clone(compute, project, region, tunnel,
+                                        restore, debug)
 
   # For each of these existing routes make a clone of their settings and request
   # that they be created.
   print '--> Requesting the creation of these routes:'
   template = '{0:24} {1:24} {2:100}'
   print template.format('NAME', 'ORIGINAL NAME', 'TARGET LINK')
-  for route in routes_to_copy:
+  for route in routes_to_clone:
     route_cloned = clone_route(route)
     if not noop:
       route_created = insert_route(compute, project, route_cloned)
@@ -316,7 +258,7 @@ def run(project, region, tunnel, revert, sleep, debug, noop):
   # Delete the original routes that we were asked to clone.
   print '--> Requesting the deletion of these routes:'
   print 'NAME'
-  for route in routes_to_copy:
+  for route in routes_to_clone:
     if not noop:
       route_deleted = delete_route(compute, project, route['name'])
     else:
@@ -333,9 +275,10 @@ def run(project, region, tunnel, revert, sleep, debug, noop):
 
 
 def main():
-  # print 'Make sure you have run: gcloud auth login'
+  # TODO(jlucena): Check that gcloud auth login has been run and message
+  # accordingly
   pargs = ParseArgs()
-  run(pargs.project, pargs.region, pargs.tunnel, pargs.revert, pargs.sleep,
+  run(pargs.project, pargs.region, pargs.tunnel, pargs.restore, pargs.sleep,
       pargs.debug,
       pargs.noop)
 
