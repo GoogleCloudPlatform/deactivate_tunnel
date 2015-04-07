@@ -24,9 +24,11 @@ except priority which should be 0.
 You can also restore any routes previously deactivated by this script by using
 the --restore flag.
 
+You must have the Gooogle Cloud SDK installed:
+ $ curl https://sdk.cloud.google.com | bash
 
-Note: be sure to run the following before running this script:
- $ gcloud auth login
+As well as the Google APIs Client Library for Python:
+ $ sudo pip install google-api-python-client
 
 """
 
@@ -273,19 +275,16 @@ def run(compute, project, region, tunnel, restore, sleep, debug, noop):
 
 
 def main():
-  # TODO(jlucena): Check that gcloud auth login has been run and message
-  # accordingly
+  """ Parses args, checks credentials then calls the core application logic. """
   pargs = ParseArgs()
 
   credentials = None
   try:
     credentials = GoogleCredentials.get_application_default()
   except ApplicationDefaultCredentialsError:
-    print 'Please authenticate first using:'
-    print ' $ gcloud auth login'
+    print 'Please authenticate first using:\n $ gcloud auth login'
     return
   compute = build('compute', 'v1', credentials=credentials)
-
 
   run(compute, pargs.project, pargs.region, pargs.tunnel, pargs.restore,
       pargs.sleep, pargs.debug, pargs.noop)
