@@ -36,6 +36,7 @@ import json
 import sys
 import time
 
+from oauth2client.client import ApplicationDefaultCredentialsError
 from oauth2client.client import GoogleCredentials
 from googleapiclient.discovery import build
 
@@ -218,12 +219,8 @@ def sleep_seconds(seconds):
   sys.stdout.write('done.\n')
 
 
-def run(project, region, tunnel, restore, sleep, debug, noop):
+def run(compute, project, region, tunnel, restore, sleep, debug, noop):
   """ Executes the route cloning logic."""
-  credentials = GoogleCredentials.get_application_default()
-  compute = build('compute', 'v1', credentials=credentials)
-  operations = []
-
   # Find all the routes you need to clone.
   routes_to_clone = get_routes_to_clone(compute, project, region, tunnel,
                                         restore, debug)
@@ -233,6 +230,7 @@ def run(project, region, tunnel, restore, sleep, debug, noop):
   print '--> Requesting the creation of these routes:'
   template = '{0:24} {1:24} {2:100}'
   print template.format('NAME', 'ORIGINAL NAME', 'TARGET LINK')
+  operations = []
   for route in routes_to_clone:
     route_cloned = clone_route(route)
     if not noop:
@@ -278,9 +276,19 @@ def main():
   # TODO(jlucena): Check that gcloud auth login has been run and message
   # accordingly
   pargs = ParseArgs()
-  run(pargs.project, pargs.region, pargs.tunnel, pargs.restore, pargs.sleep,
-      pargs.debug,
-      pargs.noop)
+
+  credentials = None
+  try:
+    credentials = GoogleCredentials.get_application_default()
+  except ApplicationDefaultCredentialsError:
+    print 'Please authenticate first using:'
+    print ' $ gcloud auth login'
+    return
+  compute = build('compute', 'v1', credentials=credentials)
+
+
+  run(compute, pargs.project, pargs.region, pargs.tunnel, pargs.restore,
+      pargs.sleep, pargs.debug, pargs.noop)
 
 
 if __name__ == '__main__':
