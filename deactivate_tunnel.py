@@ -12,12 +12,15 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Deactivates all the routes in a VPN tunnel by setting their priority to 0.
+"""Deactivates all the routes in a VPN tunnel by setting their priority to a
+   higher value indicating lower priority.
 
 1. The input parameters you need are the project, tunnel name, region.
 2. Find all the routes that point to this tunnel. 
 3. For each of these, you need to create new route with similar properties,
-except priority which should be 0.
+   except priority which should be set to a higher value indicating a lower
+   priority. (We set the priority to 2000 since the priority of a route defaults
+   to 1000 originally.)
 4. Sleep a bit (1 min, but configurable).
 5. Delete all the routes you found in step #2.
 
@@ -46,8 +49,8 @@ from googleapiclient.discovery import build
 # by this script, so that they can be restored.
 APP_NAME = 'deactivate_tunnel'
 
-# This string will be appended to a route name when it's being deactivated.
-CLONE_POSTFIX = '-p0'
+# This string will be used to conjunct the route name and the new priority."
+CLONED_ROUTE_CONJUNCTION = '-p'
 
 
 def ParseArgs():
@@ -66,6 +69,10 @@ def ParseArgs():
   parser.add_argument('--tunnel', metavar='TUNNEL_NAME', required=True,
                       help='Tunnel name to use for this invocation.')
   # Optional parameters.
+  parser.add_argument('--priority',
+                      default=2000, type=int,
+                      help='The priority to set the new routes. '
+                      'The default is 2000.')
   parser.add_argument('--sleep',
                       default=0, type=int,
                       help='Seconds to sleep before removing old routes.')
@@ -158,7 +165,7 @@ def is_route_we_created(route):
   return found
 
 
-def clone_route(route):
+def clone_route(route, priority):
   """ Clones a route from an existing on that we may have created before."""
   if is_route_we_created(route):
     original = json.loads(route['description'])
@@ -178,10 +185,10 @@ def clone_route(route):
         'description': route.get('description', ''),
     }
     route_cloned = {
-        'name': route['name'] + CLONE_POSTFIX,
+        'name': route['name'] + CLONE_POSTFIX + str(priority),
         'network': route['network'],
         'nextHopVpnTunnel': route['nextHopVpnTunnel'],
-        'priority': 0,
+        'priority': priority,
         'destRange': route['destRange'],
         'description': json.dumps(original, separators=(',', ':')),
     }
@@ -221,7 +228,8 @@ def sleep_seconds(seconds):
   sys.stdout.write('done.\n')
 
 
-def run(compute, project, region, tunnel, restore, sleep, debug, noop):
+def run(compute, project, region, tunnel, restore, priority, sleep, debug,
+        noop):
   """ Executes the route cloning logic."""
   # Find all the routes you need to clone.
   routes_to_clone = get_routes_to_clone(compute, project, region, tunnel,
@@ -234,7 +242,7 @@ def run(compute, project, region, tunnel, restore, sleep, debug, noop):
   print template.format('NAME', 'ORIGINAL NAME', 'TARGET LINK')
   operations = []
   for route in routes_to_clone:
-    route_cloned = clone_route(route)
+    route_cloned = clone_route(route, priority)
     if not noop:
       route_created = insert_route(compute, project, route_cloned)
     else:
@@ -287,7 +295,7 @@ def main():
   compute = build('compute', 'v1', credentials=credentials)
 
   run(compute, pargs.project, pargs.region, pargs.tunnel, pargs.restore,
-      pargs.sleep, pargs.debug, pargs.noop)
+      pargs.priority, pargs.sleep, pargs.debug, pargs.noop)
 
 
 if __name__ == '__main__':
