@@ -12,25 +12,35 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Deactivates all the routes in a VPN tunnel by setting their priority to a
-   higher value indicating lower priority.
+"""Deactivates a VPN tunnel on the Google Cloud Platform.
 
-1. The input parameters you need are the project, tunnel name, region.
-2. Find all the routes that point to this tunnel. 
-3. For each of these, you need to create new route with similar properties,
-   except priority which should be set to a higher value indicating a lower
-   priority. (We set the priority to 2000 since the priority of a route defaults
-   to 1000 originally.)
-4. Sleep a bit (1 min, but configurable).
-5. Delete all the routes you found in step #2.
+This python command-line application that uses the Google Python API Client
+Library to deactivate a VPN tunnel. This is done by cloning all the existing
+routes over that tunnel and setting their priority to 2000 (the higher the
+value, the lower the priority) and then deleting the existing routes. Traffic
+should then move to routes with a higher priority over a different tunnel.
+Once this occurs, there is no longer any traffic flowing over this tunnel and
+it can be considered deactivated for the purposes of maintenance or other
+changes. Once maintenance has been performed this application can be used to
+restore the routes on this tunnel back to their original name and priority.
 
-You can also restore any routes previously deactivated by this script by using
-the --restore flag.
+The application will deactivate the tunnel as follows:
+ 1. Find all routes for the given `--project`, `--region` and `--tunnel`.
+ 2. For each of these routes, clone the route giving it a new name and
+ `--priority`.
+ 3. Sleep for any optional `--sleep` time that was provided.
+ 4. Delete the original routes that were cloned.
 
-You must have the Gooogle Cloud SDK installed:
+To reactivate the tunnel the application can be used as follows:
+ 1. The `--restore` option can then be used to reactivate a tunnel by reverting
+    the cloned routes back to their original name an priority and then deleting
+    the clones.
+
+You must have the Google Cloud SDK installed and authenticated:
  $ curl https://sdk.cloud.google.com | bash
+ $ gcloud auth login
 
-As well as the Google APIs Client Library for Python:
+You must also install the Google APIs Client Library for Python:
  $ sudo pip install google-api-python-client
 
 """
@@ -56,22 +66,21 @@ CLONED_ROUTE_CONJUNCTION = '-p'
 def ParseArgs():
   """Parse args for the app, so interactive prompts can be avoided."""
 
-  def Bool(s):
-    return s.lower() in ['true', '1']
-
-  parser = argparse.ArgumentParser()
+  parser = argparse.ArgumentParser(description='Deactivates a VPN tunnel on '
+                                   'the Google Cloud Platform')
   # Required parameters.
   parser.add_argument('--project', metavar='PROJECT_ID', required=True,
-                      help='Google Cloud Platform project ID to use for this '
-                      'invocation.')
+                      help='Required - Google Cloud Platform project ID to use '
+                      'for this invocation.')
   parser.add_argument('--region', metavar='REGION_NAME', required=True,
-                      help='Region name to use for this invocation.')
+                      help='Required - Region name to use for this invocation.')
   parser.add_argument('--tunnel', metavar='TUNNEL_NAME', required=True,
-                      help='Tunnel name to use for this invocation.')
+                      help='Required - Tunnel name to use for this invocation.')
+
   # Optional parameters.
   parser.add_argument('--priority',
                       default=2000, type=int,
-                      help='The priority to set the new routes. '
+                      help='The priority to set the new routes it creates. '
                       'The default is 2000.')
   parser.add_argument('--sleep',
                       default=0, type=int,
@@ -82,10 +91,11 @@ def ParseArgs():
                       'by this script.')
   parser.add_argument('--noop',
                       default=False, action='store_const', const=True,
-                      help='Does not actually create or delete routes.')
+                      help='Shows what would happen but does not actually '
+                      'create or delete routes.')
   parser.add_argument('--debug',
                       default=False, action='store_const', const=True,
-                      help='Enable debugging when set.')
+                      help='Displays debugging messages.')
 
   return parser.parse_args()
 
@@ -185,7 +195,7 @@ def clone_route(route, priority):
         'description': route.get('description', ''),
     }
     route_cloned = {
-        'name': route['name'] + CLONE_POSTFIX + str(priority),
+        'name': route['name'] + CLONED_ROUTE_CONJUNCTION + str(priority),
         'network': route['network'],
         'nextHopVpnTunnel': route['nextHopVpnTunnel'],
         'priority': priority,
@@ -261,7 +271,10 @@ def run(compute, project, region, tunnel, restore, priority, sleep, debug,
 
   # Sleep for any additional time if you were requested to do so.
   if sleep > 0:
-    sleep_seconds(sleep)
+    if not noop:
+      sleep_seconds(sleep)
+    else:
+      print('Sleep for an additional %d seconds.' % sleep)
 
   # Delete the original routes that we were asked to clone.
   print '--> Requesting the deletion of these routes:'
