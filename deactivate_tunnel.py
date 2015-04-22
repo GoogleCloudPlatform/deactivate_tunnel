@@ -15,14 +15,25 @@
 """Deactivates a VPN tunnel on the Google Cloud Platform.
 
 This python command-line application that uses the Google Python API Client
-Library to deactivate a VPN tunnel. This is done by cloning all the existing
-routes over that tunnel and setting their priority to 2000 (the higher the
-value, the lower the priority) and then deleting the existing routes. Traffic
-should then move to routes with a higher priority over a different tunnel.
-Once this occurs, there is no longer any traffic flowing over this tunnel and
-it can be considered deactivated for the purposes of maintenance or other
-changes. Once maintenance has been performed this application can be used to
-restore the routes on this tunnel back to their original name and priority.
+Library to deactivate a VPN tunnel. This is done as follows:
+
+1. All existing routes over the tunnel are cloned changing their name and
+setting their priority to 2000 (the higher the value, the lower the priority).
+2. The original routes are then deleted, leaving only the cloned routes in
+place.
+
+Traffic should then move to routes with a higher priority over a different
+tunnel. Routes on the other side of the tunnel will need to be similarly
+deprioritized in order for prevent incoming traffic from passing through 
+the tunnel (through a similar process scripted against that specific gateway).
+
+Once this occurs, there is no longer any traffic flowing over this
+tunnel and it can be considered deactivated for the purposes of maintenance
+or other changes.
+
+After maintenance has been performed this application can be used to restore
+the routes on this tunnel back to their original name and priority. (Routes
+on the other side of the tunnel can be restored as well).
 
 The application will deactivate the tunnel as follows:
  1. Find all routes for the given `--project`, `--region` and `--tunnel`.
@@ -93,15 +104,15 @@ def ParseArgs():
                       default=False, action='store_const', const=True,
                       help='Shows what would happen but does not actually '
                       'create or delete routes.')
-  parser.add_argument('--debug',
+  parser.add_argument('--v',
                       default=False, action='store_const', const=True,
-                      help='Displays debugging messages.')
+                      help='Displays verbose output and debugging.')
 
   return parser.parse_args()
 
 
 def name_from_url(url):
-  """ Returns the right most value from a path."""
+  """ Parses a URL in REST format where the last component is the object name"""
   return url.split('/')[-1]
 
 
@@ -308,7 +319,7 @@ def main():
   compute = build('compute', 'v1', credentials=credentials)
 
   run(compute, pargs.project, pargs.region, pargs.tunnel, pargs.restore,
-      pargs.priority, pargs.sleep, pargs.debug, pargs.noop)
+      pargs.priority, pargs.sleep, pargs.v, pargs.noop)
 
 
 if __name__ == '__main__':

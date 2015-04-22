@@ -2,19 +2,30 @@
 
 This python command-line application that uses the
 [Google Python API Client Library](https://developers.google.com/api-client-library/python/)
-to deactivate a VPN tunnel. This is done by cloning all the existing routes over that tunnel,
-changing their name and setting their priority to 2000 (the higher the value, the lower the priority)
-and then deleting the existing routes. Traffic should then move to routes with a higher priority over
-a different tunnel. Once this occurs, there is no longer any traffic flowing over this tunnel
-and it can be considered deactivated for the purposes of maintenance or other changes. Once
-maintenance has been performed this application can be used to restore the routes on this
-tunnel back to their original name and priority. 
+to deactivate a VPN tunnel. This is done as follows:
 
+1. All existing routes over the tunnel are cloned changing their name and
+setting their priority to 2000 (the higher the value, the lower the priority).
+2. The original routes are then deleted, leaving only the cloned routes in
+place.
 
+Traffic should then move to routes with a higher priority over a different
+tunnel. Routes on the other side of the tunnel will need to be similarly
+deprioritized in order for prevent incoming traffic from passing through 
+the tunnel (through a similar process scripted against that specific gateway).
+
+Once this occurs, there is no longer any traffic flowing over this
+tunnel and it can be considered deactivated for the purposes of maintenance
+or other changes.
+
+After maintenance has been performed this application can be used to restore
+the routes on this tunnel back to their original name and priority. (Routes
+on the other side of the tunnel can be restored as well).
 
 ## Pre-requisites
 
-1. Access to a project on the [Google Developers Console](https://console.developers.google.com)
+1. Access to a project on the
+[Google Developers Console](https://console.developers.google.com)
 that uses the [VPN](https://cloud.google.com/compute/docs/vpn) feature.
 2. Install the [Google Cloud SDK](https://cloud.google.com/sdk/)
 
@@ -53,12 +64,13 @@ optional arguments:
                         script.
   --noop                Shows what would happen but does not actually create
                         or delete routes.
-  --debug               Displays debugging messages.
+  --v                   Displays verbose output and debugging.
 ```
 
 The application will deactivate the tunnel as follows:
  1. Find all routes for the given `--project`, `--region` and `--tunnel`.
- 2. For each of these routes, clone the route giving it a new name and `--priority`.
+ 2. For each of these routes, clone the route giving it a new name and
+`--priority`.
  3. Sleep for any optional `--sleep` time that was provided.
  4. Delete the original routes that were cloned.
 
