@@ -47,7 +47,7 @@ python deactivate_tunnel.py
 
 usage: deactivate_tunnel.py [-h] --project PROJECT_ID --region REGION_NAME
                             --tunnel TUNNEL_NAME [--priority PRIORITY]
-                            [--sleep SLEEP] [--restore] [--noop] [--debug]
+                            [--sleep SLEEP] [--restore] [--noop] [--v]
 
 Deactivates a VPN tunnel on the Google Cloud Platform
 
