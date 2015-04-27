@@ -41,6 +41,7 @@ The application will deactivate the tunnel as follows:
  `--priority`.
  3. Sleep for any optional `--sleep` time that was provided.
  4. Delete the original routes that were cloned.
+ 5. Sleep again for any optional `--sleep` time that was provided.
 
 To reactivate the tunnel the application can be used as follows:
  1. The `--restore` option can then be used to reactivate a tunnel by reverting
@@ -304,6 +305,13 @@ def run(compute, project, region, tunnel, restore, priority, sleep, debug,
   if not noop:
     wait_for_global_operation(compute, project, operations)
   operations = []
+
+  # Sleep again for any additional time if you were requested to do so.
+  if sleep > 0:
+    if not noop:
+      sleep_seconds(sleep)
+    else:
+      print('Sleep for an additional %d seconds.' % sleep)
 
 
 def main():

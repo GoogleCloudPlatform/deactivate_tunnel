@@ -73,6 +73,7 @@ The application will deactivate the tunnel as follows:
 `--priority`.
  3. Sleep for any optional `--sleep` time that was provided.
  4. Delete the original routes that were cloned.
+ 5. Sleep again for any optional `--sleep` time that was provided.
 
 To reactivate the tunnel the application can be used as follows:
  1. The `--restore` option can then be used to reactivate a tunnel by reverting
