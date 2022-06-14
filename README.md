@@ -24,17 +24,20 @@ on the other side of the tunnel can be restored as well).
 
 ## Pre-requisites
 
-1. Access to a project on the
-[Google Developers Console](https://console.developers.google.com)
-that uses the [VPN](https://cloud.google.com/compute/docs/vpn) feature.
-2. Install the [Google Cloud SDK](https://cloud.google.com/sdk/)
+1. Access to a project on the [Google Cloud
+   Console](https://console.cloud.google.com) that uses the [Cloud
+   VPN](https://cloud.google.com/network-connectivity/docs/vpn) feature.
+2. Install the [Google Cloud SDK](https://cloud.google.com/sdk/) following the
+   [instructions](https://cloud.google.com/sdk/docs/install-sdk) specific to
+   your platform.
+3. Authenticate in order to be able to interact with your project.
 
 ```bash
-curl https://sdk.cloud.google.com | bash
 gcloud auth login
 gcloud config set project your-project-id
 ```
-3. Install dependencies using [pip](https://pypi.python.org/pypi/pip)
+
+4. Install dependencies using [pip](https://pypi.python.org/pypi/pip)
 
 ```bash
 pip install -r requirements.txt
@@ -43,7 +46,7 @@ pip install -r requirements.txt
 ## Running the application
 
 ```bash
-python deactivate_tunnel.py
+python2 deactivate_tunnel.py
 
 usage: deactivate_tunnel.py [-h] --project PROJECT_ID --region REGION_NAME
                             --tunnel TUNNEL_NAME [--priority PRIORITY]
@@ -81,7 +84,7 @@ To reactivate the tunnel the application can be used as follows:
     the clones.
 
 ## Products
-- [Google Compute Engine](https://developers.google.com/compute)
+- [Google Cloud VPN](https://cloud.google.com/network-connectivity/docs/vpn)
 
 
 ## Contributing changes
